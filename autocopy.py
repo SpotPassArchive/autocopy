@@ -69,14 +69,24 @@ def find_unused_filename(path: str) -> str:
     path = os.path.abspath(path)
     filename = os.path.basename(path)
     directory = os.path.dirname(path)
-    name, extension = os.path.extsep.split(filename)
+    split_filename = filename.rsplit(os.path.extsep, 1)
+    if len(split_filename) == 2:
+        name, extension = split_filename
+    elif len(split_filename) == 1:
+        # no extension
+        name, = split_filename
+        extension = None
 
     directory_list = os.listdir(directory)
     number = 2
     while True:
         if filename not in directory_list:
             return filename
-        filename = os.path.extsep.join([name, str(number), extension])
+        if extension is None:
+            filename = os.path.extsep.join([name, str(number)])
+        else:
+            filename = os.path.extsep.join([name, str(number), extension])
+        number += 1
 
 def byteswap32(n: int) -> int:
     return (((n << 24) & 0xFF000000) |
@@ -125,7 +135,8 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
     print("Extracting NAND backup {}...".format(os.path.basename(path)))
     nand_stat = nandctr.get_time(path)
     with open(path, "rb") as nand:
-        mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
+        with contextlib.redirect_stdout(None): # suppress output
+            mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with CTRNandHandle(mount, "/ctrnand_full.img") as ctrnand_handle:
             id0 = get_id0(mount=mount)
