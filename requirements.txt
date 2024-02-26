@@ -1,0 +1,3 @@
+ninfs
+pyreadpartitions
+pyfatfs
