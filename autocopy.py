@@ -13,6 +13,7 @@ try:
     from ninfs.mount import nandctr
     import pyreadpartitions
     from pyfatfs import PyFat, FatIO
+    import fuse
 except ImportError as exception:
     if __name__ == "__main__":
         print('Please run "pip install -r requirements.txt"', file=sys.stderr)
@@ -108,11 +109,20 @@ def decode_key_y(key_y: bytes) -> str:
     return id0
 
 def get_id0(mount: nandctr.CTRNandImageMount) -> str:
-    "extracts id0 from a NAND dump's handle"
-    with CTRNandHandle(mount, "/essential/movable.bin") as movable_sed:
-        movable_sed.seek(0x110)
-        key_y = movable_sed.read(0x10)
+    "extracts id0 from a NAND dump's movable.sed"
+    try:
+        with CTRNandHandle(mount, "/essential/movable.bin") as movable_sed:
+            movable_sed.seek(0x110)
+            key_y = movable_sed.read(0x10)
+    except fuse.FuseOSError:
+        return None
     return decode_key_y(key_y)
+
+def get_id0_alt(fat_handle: PyFat.PyFat, location: int=0) -> str:
+    "gets the ID0 by listing the contents of /data"
+    dir_entry = fat_handle.root_dir.get_entry("/data")
+    dirs = dir_entry.get_entries()[0]
+    return str(dirs[0]) # returns the name of the first directory
 
 def get_mbr_partition_location(handle: io.IOBase, partition_index: int=0) -> int:
     "gets the location of a particular partition in a multi-partition disk image"
@@ -120,15 +130,6 @@ def get_mbr_partition_location(handle: io.IOBase, partition_index: int=0) -> int
     target_partition = partition_info.partitions[0]
     partition_location = target_partition.lba * partition_info.lba_size
     return partition_location
-
-def get_fat_file_handle(handle: io.IOBase, path: pathlib.Path, location: int=0) -> FatIO.FatIO:
-    "gets a file handle from a FAT partition"
-    fat = PyFat.PyFat(offset=location)
-    fat.set_fp(fp=handle)
-    fat_io = FatIO.FatIO(fs=fat, path=path)
-    # fat.close() is automatically called in PyFat.__del__,
-    # so it's unnecessary to worry about that
-    return fat_io
 
 def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, cid: str=None, id0: str=None, force_disa: bool=False):
     "extracts 4 layers of encoding from the NAND dump in order to get partitionA.bin"
@@ -139,18 +140,30 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
             mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with CTRNandHandle(mount, "/ctrnand_full.img") as ctrnand_handle:
-            if id0 is None:
-                id0 = get_id0(mount=mount)
-                print("id0 = {}".format(id0))
-            disa_path = "/data/{}/sysdata/00010034/00000000".format(id0)
             # the file is a multi-partition disk image, so this finds the first partition
             ctrnand_partition_location = get_mbr_partition_location(ctrnand_handle, 0)
+
+            # mount the FAT partition
+            fat_handle = PyFat.PyFat(offset=ctrnand_partition_location)
+            fat_handle.set_fp(fp=ctrnand_handle)
+
+            # detect the ID0
+            if id0 is None:
+                id0 = get_id0(mount=mount)
+                if id0 is None:
+                    print("failed to read id0. this is a bug in ninfs, using alternate id0 detection")
+                    id0 = get_id0_alt(fat_handle=fat_handle)
+                print("id0 = {}".format(id0))
+            disa_path = "/data/{}/sysdata/00010034/00000000".format(id0)
+
             # now get the DISA image containing the data we want,
             # located at "/data/<id0>/sysdata/00010034/00000000"
-            disa_image_handle = get_fat_file_handle(handle=ctrnand_handle, path=disa_path, location=ctrnand_partition_location)
+            disa_image_handle = FatIO.FatIO(fs=fat_handle, path=disa_path)
+
             # now read that DISA image's partitionA.bin
             partition_a = extract_disa_partition_a(disa_handle=disa_image_handle, force=force_disa)
             filename = find_unused_filename("partitionA.bin")
+
             # finally, write it to a file
             with open(filename, "wb") as partition_a_out:
                 partition_a_out.write(partition_a)
