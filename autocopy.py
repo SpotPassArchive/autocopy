@@ -130,7 +130,7 @@ def get_fat_file_handle(handle: io.IOBase, path: pathlib.Path, location: int=0) 
     # so it's unnecessary to worry about that
     return fat_io
 
-def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, cid: str=None, force_disa: bool=False):
+def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, cid: str=None, id0: str=None, force_disa: bool=False):
     "extracts 4 layers of encoding from the NAND dump in order to get partitionA.bin"
     print("Extracting NAND backup {}...".format(os.path.basename(path)))
     nand_stat = nandctr.get_time(path)
@@ -139,9 +139,10 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
             mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with CTRNandHandle(mount, "/ctrnand_full.img") as ctrnand_handle:
-            id0 = get_id0(mount=mount)
+            if id0 is None:
+                id0 = get_id0(mount=mount)
+                print("id0 = {}".format(id0))
             disa_path = "/data/{}/sysdata/00010034/00000000".format(id0)
-            print("id0 = {}".format(id0))
             # the file is a multi-partition disk image, so this finds the first partition
             ctrnand_partition_location = get_mbr_partition_location(ctrnand_handle, 0)
             # now get the DISA image containing the data we want,
@@ -155,10 +156,9 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
                 partition_a_out.write(partition_a)
             print("Extracted to {}".format(filename))
 
-def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, force_disa: bool=False):
-    print(paths)
+def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, force_disa: bool=False):
     for path in paths:
-        extract_nand_backup(path=path, boot9=boot9, dev=dev, otp=otp, force_disa=force_disa)
+        extract_nand_backup(path=path, boot9=boot9, dev=dev, otp=otp, id0=id0, force_disa=force_disa)
 
 def interactive() -> None:
     print("Welcome to autocopy!")
@@ -187,9 +187,10 @@ def main() -> None:
         advanced.add_argument("-d", "--dev", action="store_true", help="extract from a development console's NAND")
         advanced.add_argument("-o", "--otp", type=str, help="only needed for old NAND dumps")
         advanced.add_argument("-c", "--cid", type=str, help="only needed for old NAND dumps")
+        advanced.add_argument("-0", "--id0", type=str, help="only needed if you encounter an error")
         advanced.add_argument("--force-disa", action="store_true", help="if you got an error, this might make it work but will probably break things")
         args = parser.parse_args()
-        extract_nand_backups(args.nanddumps, args.boot9, args.dev, args.otp)
+        extract_nand_backups(paths=args.nanddumps, boot9=args.boot9, dev=args.dev, otp=args.otp, id0=args.id0, force_disa=args.force_disa)
 
 def extract_disa_partition_a(disa_handle: io.IOBase, force: bool=False) -> bytes:
     # heavily reduced version of the main() function in 3ds-save-tool/disa-extract.py
