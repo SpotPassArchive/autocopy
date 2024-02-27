@@ -1,4 +1,5 @@
 ninfs
 pyreadpartitions
 pyfatfs
+pyctr
 fusepy

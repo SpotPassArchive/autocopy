@@ -12,8 +12,9 @@ import argparse
 try:
     from ninfs.mount import nandctr
     import pyreadpartitions
-    from pyfatfs import PyFat, FatIO
     import fuse
+    from pyfatfs import PyFat, FatIO
+    from pyctr.type.save.disa import DISA
 except ImportError as exception:
     if __name__ == "__main__":
         print('Please run "pip install -r requirements.txt"', file=sys.stderr)
@@ -161,7 +162,7 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
             disa_image_handle = FatIO.FatIO(fs=fat_handle, path=disa_path)
 
             # now read that DISA image's partitionA.bin
-            partition_a = extract_disa_partition_a(disa_handle=disa_image_handle, force=force_disa)
+            partition_a = extract_disa_partition_a(disa_handle=disa_image_handle)
             filename = find_unused_filename("partitionA.bin")
 
             # finally, write it to a file
@@ -205,57 +206,14 @@ def main() -> None:
         args = parser.parse_args()
         extract_nand_backups(paths=args.nanddumps, boot9=args.boot9, dev=args.dev, otp=args.otp, id0=args.id0, force_disa=args.force_disa)
 
-def extract_disa_partition_a(disa_handle: io.IOBase, force: bool=False) -> bytes:
-    # heavily reduced version of the main() function in 3ds-save-tool/disa-extract.py
-    # you can use force to skip all validation if it fails
-    # under some circumstances, it can still work
-
-    # reads DISA header
-    disa_handle.seek(0x100)
-    header = disa_handle.read(0x100)
-    disa, ver, \
-        partition_count, secondary_partition_table_offset, primary_partition_table_offset, partition_table_size, \
-        partition_a_descriptor_offset, partition_a_descriptor_size, \
-        partition_b_descriptor_offset, partition_b_descriptor_size, \
-        partition_a_offset, partition_a_size, partition_b_offset, partition_b_size, \
-        active_table, table_hash = struct.unpack(
-            "<III4xQQQQQQQQQQQB3x32s116x", header)
-
-    # this is not overriden by force, because if it's not even a DISA,
-    # it's highly unlikely to be the right file
-    assert disa == 0x41534944, "not a DISA format"
-
-    if not force:
-        assert ver == 0x00040000, "wrong DISA version"
-
-    if not force:
-        # it's important to have the distinction:
-        # a partition_count of 2 is valid for DISA images in general,
-        # just not for the one Pretendo needs
-        assert partition_count == 1 or partition_count == 2, "invalid partition count: {}".format(partition_count)
-        assert partition_count == 1, "wrong partition count: {}".format(partition_count)
-
-    if active_table == 0:
-        partition_table_offset = primary_partition_table_offset
-    elif active_table == 1:
-        partition_table_offset = secondary_partition_table_offset
-    elif not force:
-        assert False, "wrong active table ID %d" % active_table
-
-    if not force:
-        # verify partition table hash
-        disa_handle.seek(partition_table_offset)
-        partition_table = disa_handle.read(partition_table_size)
-        assert hashlib.sha256(partition_table).digest() == table_hash, "partition table hash mismatch!"
-
-    # reads and unwraps the SAVE image
-    partition_a_descriptor = partition_table[partition_a_descriptor_offset:partition_a_descriptor_offset+partition_a_descriptor_size]
-    disa_handle.seek(partition_a_offset)
-    partition_a = disa_handle.read(partition_a_size)
-
-    disa_handle.close()
-
-    return partition_a
+# thanks to ZeroSkill for making this a LOT simpler,
+# and not return a corrupted file
+def extract_disa_partition_a(disa_handle: io.IOBase) -> bytes:
+    with DISA(disa_handle) as disa:
+        partition = disa.partitions[0].dpfs_lv3_file
+        partition.seek(0x9000)
+        content = partition.read()
+        return content
 
 if __name__ == "__main__":
     main()
