@@ -1,5 +1,1 @@
-ninfs
-pyreadpartitions
-pyfatfs
-pyctr
-fusepy
+git+https://github.com/ihaveamac/pyctr

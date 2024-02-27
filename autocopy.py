@@ -8,63 +8,19 @@ import pathlib
 import hashlib
 import io
 import argparse
+import traceback
 
 try:
-    from ninfs.mount import nandctr
-    import pyreadpartitions
-    import fuse
-    from pyfatfs import PyFat, FatIO
     from pyctr.type.save.disa import DISA
+    from pyctr.type.nand import NAND
+    from pyctr.crypto import CryptoEngine
 except ImportError as exception:
     if __name__ == "__main__":
+        traceback.print_exception(exception)
         print('Please run "pip install -r requirements.txt"', file=sys.stderr)
         sys.exit(1)
     else:
         raise exception from None
-
-class CTRNandHandle(io.RawIOBase):
-    "a stream used for reading from the CTRNAND image"
-    def __init__(self, mount: nandctr.CTRNandImageMount, path: pathlib.Path) -> None:
-        self.mount = mount
-        self.path = path
-        attr = self.mount.getattr(self.path)
-        self._offset = 0
-        self.size = attr["st_size"]
-        self.__closed = False
-        self._handle = self.mount.open(path, attr["st_mode"])
-
-    def __check_closed(self) -> None:
-        if self.__closed:
-            raise ValueError("I/O operation on closed file.")
-
-    def read(self, size: int=-1) -> bytes:
-        self.__check_closed()
-        read_bytes = self.mount.read(path=self.path, size=size, offset=self._offset, fh=self._handle)
-        self._offset += len(read_bytes)
-        return read_bytes
-
-    def readable(self) -> bool:
-        self.__check_closed()
-        return True
-
-    def seek(self, offset: int, whense: int=os.SEEK_SET) -> None:
-        whense = int(whense)
-        if whense == os.SEEK_SET:
-            self._offset = offset
-        elif whense == os.SEEK_CUR:
-            pass
-        elif whense == os.SEEK_END:
-            self._offset = self.size
-        else:
-            raise ValueError("whense value {} unsupported".format(whense))
-
-    def seekable(self) -> bool:
-        self.__check_closed()
-        return True
-
-    def close(self) -> None:
-        # I don't know how to close it properly, so I'm just marking it as closed
-        self.__closed = True
 
 def find_unused_filename(path: str) -> str:
     "find an unused filename (e.g. file.2.bin instead of file.bin)"
@@ -90,89 +46,67 @@ def find_unused_filename(path: str) -> str:
             filename = os.path.extsep.join([name, str(number), extension])
         number += 1
 
-def byteswap32(n: int) -> int:
-    return (((n << 24) & 0xFF000000) |
-            ((n <<  8) & 0x00FF0000) |
-            ((n >>  8) & 0x0000FF00) |
-            ((n >> 24) & 0x000000FF))
+def is_duplicate(path: str, filename: str, new_hash: bytes) -> bool:
+    "checks if the file has been dumped already"
+    # because "file.bin" will automatically be renamed to "file.2.bin",
+    # this must remove the ".bin" and check every file starting with the prefix "file"
+    filename_start = filename.rsplit(os.path.extsep, 1)[0]
+    for existing_filename in os.listdir(path):
+        existing_path = os.path.join(path, existing_filename)
+        if not os.path.isfile(existing_path):
+            continue
+        if existing_filename.startswith(filename_start):
+            with open(existing_path, "rb") as compare_file:
+                file_hash = hashlib.md5(compare_file.read()).digest()
+            if file_hash == new_hash:
+                return True
+    return False
 
-def decode_key_y(key_y: bytes) -> str:
-    """
-    calculates ID0 from keyY
-    see https://3dbrew.org/wiki/Nand/private/movable.sed for more information
-    """
-    key_y_hash = hashlib.sha256(key_y).hexdigest()
-    id0 = ""
-    for word_index in range(0, 32, 8):
-        word = int(key_y_hash[word_index:word_index+8], 16)
-        swapped = byteswap32(word)
-        id0 += "{:02x}".format(swapped)
-    return id0
-
-def get_id0(mount: nandctr.CTRNandImageMount) -> str:
-    "extracts id0 from a NAND dump's movable.sed"
-    try:
-        with CTRNandHandle(mount, "/essential/movable.bin") as movable_sed:
-            movable_sed.seek(0x110)
-            key_y = movable_sed.read(0x10)
-    except fuse.FuseOSError:
-        return None
-    return decode_key_y(key_y)
-
-def get_id0_alt(fat_handle: PyFat.PyFat, location: int=0) -> str:
-    "gets the ID0 by listing the contents of /data"
-    dir_entry = fat_handle.root_dir.get_entry("/data")
-    dirs = dir_entry.get_entries()[0]
-    return str(dirs[0]) # returns the name of the first directory
-
-def get_mbr_partition_location(handle: io.IOBase, partition_index: int=0) -> int:
-    "gets the location of a particular partition in a multi-partition disk image"
-    partition_info = pyreadpartitions.get_mbr_info(handle)
-    target_partition = partition_info.partitions[0]
-    partition_location = target_partition.lba * partition_info.lba_size
-    return partition_location
-
-def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, cid: str=None, id0: str=None, force_disa: bool=False):
+# thanks to ihaveahax for telling me about pyctr
+def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: bool=False,
+                        otp: str=None, cid: str=None, id0: str=None, skip_duplicate_check: bool=False) -> None:
     "extracts 4 layers of encoding from the NAND dump in order to get partitionA.bin"
     print("Extracting NAND backup {}...".format(os.path.basename(path)))
-    nand_stat = nandctr.get_time(path)
-    with open(path, "rb") as nand:
-        with contextlib.redirect_stdout(None): # suppress output
-            mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
+    #nand_stat = nandctr.get_time(path)
+    with NAND(path) as nand:
+        #with contextlib.redirect_stdout(None): # suppress output
+        #    mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
-        with CTRNandHandle(mount, "/ctrnand_full.img") as ctrnand_handle:
-            # the file is a multi-partition disk image, so this finds the first partition
-            ctrnand_partition_location = get_mbr_partition_location(ctrnand_handle, 0)
-
-            # mount the FAT partition
-            fat_handle = PyFat.PyFat(offset=ctrnand_partition_location)
-            fat_handle.set_fp(fp=ctrnand_handle)
-
+        with nand.open_ctr_fat() as ctrnand_handle:
+            crypto_engine = CryptoEngine()
+            movable_sed = nand.essential.open('movable').read()
+            crypto_engine.setup_sd_key(data=movable_sed)
             # detect the ID0
             if id0 is None:
-                id0 = get_id0(mount=mount)
+                id0 = crypto_engine.id0.hex()
                 if id0 is None:
                     print("failed to read id0. this is a bug in ninfs, using alternate id0 detection")
-                    id0 = get_id0_alt(fat_handle=fat_handle)
+                    id0 = ctrnand_handle.listdir("/data")[0] # simply open the first file/folder in /data
                 print("id0 = {}".format(id0))
             disa_path = "/data/{}/sysdata/00010034/00000000".format(id0)
 
             # now get the DISA image containing the data we want,
             # located at "/data/<id0>/sysdata/00010034/00000000"
-            disa_image_handle = FatIO.FatIO(fs=fat_handle, path=disa_path)
+            with ctrnand_handle.openbin(path=disa_path, mode="rb") as disa_image_handle:
+                # now read that DISA image's partitionA.bin
+                partition_a = extract_disa_partition_a(disa_handle=disa_image_handle)
+                filename = find_unused_filename("partitionA.bin")
 
-            # now read that DISA image's partitionA.bin
-            partition_a = extract_disa_partition_a(disa_handle=disa_image_handle)
-            filename = find_unused_filename("partitionA.bin")
+                # check if the file has been dumped already
+                if not skip_duplicate_check:
+                    partition_a_hash = hashlib.md5(partition_a).digest()
+                    if is_duplicate(path=os.path.curdir, filename="partitionA.bin", new_hash=partition_a_hash):
+                        print("Already dumped, skipping")
+                        return
 
-            # finally, write it to a file
-            with open(filename, "wb") as partition_a_out:
-                partition_a_out.write(partition_a)
-            print("Extracted to {}".format(filename))
+                # finally, write it to a file
+                with open(filename, "wb") as partition_a_out:
+                    partition_a_out.write(partition_a)
+                print("Dumped to {}".format(filename))
 
-def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, force_disa: bool=False):
+def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, skip_duplicate_check: bool=False) -> None:
     for path in paths:
-        extract_nand_backup(path=path, boot9=boot9, dev=dev, otp=otp, id0=id0, force_disa=force_disa)
+        extract_nand_backup(path=path, boot9=boot9, dev=dev, otp=otp, id0=id0, skip_duplicate_check=skip_duplicate_check)
 
 def interactive() -> None:
     print("Welcome to autocopy!")
@@ -196,15 +130,15 @@ def main() -> None:
     else:
         parser = argparse.ArgumentParser(description="A script to automatically dump Pretendo BOSS files from a NAND dump")
         parser.add_argument("nanddumps", type=pathlib.Path, nargs="+", help="path to NAND dump(s)")
-        parser.add_argument("-9", "--boot9", type=pathlib.Path, required=True, help="the ARM9 BootROM (boot9.bin), can be dumped from any console")
+        parser.add_argument("-9", "--boot9", type=pathlib.Path, default="boot9.bin", help="the ARM9 BootROM (boot9.bin), can be dumped from any console")
+        parser.add_argument("-n", "--skip-duplicate-check", action="store_true", help="don't check if the file has been dumped already")
         advanced = parser.add_argument_group("advanced")
         advanced.add_argument("-d", "--dev", action="store_true", help="extract from a development console's NAND")
         advanced.add_argument("-o", "--otp", type=str, help="only needed for old NAND dumps")
         advanced.add_argument("-c", "--cid", type=str, help="only needed for old NAND dumps")
         advanced.add_argument("-0", "--id0", type=str, help="only needed if you encounter an error")
-        advanced.add_argument("--force-disa", action="store_true", help="if you got an error, this might make it work but will probably break things")
         args = parser.parse_args()
-        extract_nand_backups(paths=args.nanddumps, boot9=args.boot9, dev=args.dev, otp=args.otp, id0=args.id0, force_disa=args.force_disa)
+        extract_nand_backups(paths=args.nanddumps, boot9=args.boot9, dev=args.dev, otp=args.otp, id0=args.id0, skip_duplicate_check=args.skip_duplicate_check)
 
 # thanks to ZeroSkill for making this a LOT simpler,
 # and not return a corrupted file
