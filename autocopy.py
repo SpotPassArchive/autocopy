@@ -92,7 +92,7 @@ def extract_nand_backup(path: pathlib.Path, crypto: CryptoEngine = None, boot9: 
     with NAND(file=path, dev=dev, crypto=crypto, otp_file=otp, cid_file=cid) as nand:
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with nand.open_ctr_fat() as ctrnand_handle:
-            movable_sed = fat.readbytes("/private/movable.sed")
+            movable_sed = ctrnand_handle.readbytes("/private/movable.sed")
             crypto.setup_sd_key(data=movable_sed)
             # detect the ID0
             if id0 is None:
