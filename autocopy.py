@@ -1,5 +1,8 @@
 #!/bin/python3
 
+VERSION = (0, 1, 0) # major, minor, patch
+VERSION_STRING = "v{}".format(".".join([str(version_part) for version_part in VERSION]))
+
 import sys
 import os
 import struct
@@ -14,6 +17,7 @@ try:
     from pyctr.type.save.disa import DISA
     from pyctr.type.nand import NAND
     from pyctr.crypto import CryptoEngine
+    from pyctr.crypto import engine
 except ImportError as exception:
     if __name__ == "__main__":
         traceback.print_exception(exception)
@@ -62,24 +66,42 @@ def is_duplicate(path: str, filename: str, new_hash: bytes) -> bool:
                 return True
     return False
 
+def get_crypto_engine(boot9: pathlib.Path = None):
+    if os.path.isfile(boot9):
+        crypto = CryptoEngine(boot9=boot9)
+    else:
+        # use autodetection
+        try:
+            crypto = CryptoEngine(boot9=None)
+        except engine.BootromNotFoundError:
+            print("An ARM9 BootROM was not found.  "
+                  "Please dump it from ANY console (not necessarily the one that had the NAND backup) "
+                  "and place it here, making sure it's named boot9.bin", file=sys.stderr)
+            sys.exit(1)
+    return crypto
+
 # thanks to ihaveahax for telling me about pyctr
-def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: bool=False,
-                        otp: str=None, cid: str=None, id0: str=None, skip_duplicate_check: bool=False) -> None:
+def extract_nand_backup(path: pathlib.Path, crypto: CryptoEngine = None, boot9: pathlib.Path = None, dev: bool=False,
+                        otp: str=None, cid: str=None, id0: str=None, skip_duplicate_check: bool=False, quiet: bool=False) -> None:
     "extracts 4 layers of encoding from the NAND dump in order to get partitionA.bin"
-    print("Extracting NAND backup {}...".format(os.path.basename(path)))
-    with NAND(path) as nand:
+    if not quiet:
+        print("Extracting NAND backup {}...".format(os.path.basename(path)))
+    # this way, there doesn't need to be a seperate crypto for each console
+    if crypto is None:
+        crypto = get_crypto_engine(boot9=boot9)
+    with NAND(file=path, dev=dev, crypto=crypto, otp_file=otp, cid_file=cid) as nand:
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with nand.open_ctr_fat() as ctrnand_handle:
-            crypto_engine = CryptoEngine(boot9=boot9)
-            movable_sed = nand.essential.open('movable').read()
-            crypto_engine.setup_sd_key(data=movable_sed)
+            movable_sed = fat.readbytes("/private/movable.sed")
+            crypto.setup_sd_key(data=movable_sed)
             # detect the ID0
             if id0 is None:
-                id0 = crypto_engine.id0.hex()
+                id0 = crypto.id0.hex()
                 if id0 is None:
-                    print("failed to read id0. this is a bug in ninfs, using alternate id0 detection")
+                    print("failed to read id0. this is a bug in ninfs, using alternate id0 detection", file=sys.stderr)
                     id0 = ctrnand_handle.listdir("/data")[0] # simply open the first file/folder in /data
-                print("id0 = {}".format(id0))
+                if not quiet:
+                    print("id0 = {}".format(id0))
             disa_path = "/data/{}/sysdata/00010034/00000000".format(id0)
 
             # get the DISA image containing the data we want,
@@ -93,20 +115,23 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
                 if not skip_duplicate_check:
                     partition_a_hash = hashlib.md5(partition_a).digest()
                     if is_duplicate(path=os.path.curdir, filename="partitionA.bin", new_hash=partition_a_hash):
-                        print("Already dumped, skipping")
+                        if not quiet:
+                            print("Already dumped, skipping")
                         return
 
                 # finally, write it to a file
                 with open(filename, "wb") as partition_a_out:
                     partition_a_out.write(partition_a)
-                print("Dumped to {}".format(filename))
+                if not quiet:
+                    print("Dumped to {}".format(filename))
 
-def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, skip_duplicate_check: bool=False) -> None:
+def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, skip_duplicate_check: bool=False, quiet: bool=False) -> None:
+    crypto = get_crypto_engine(boot9=boot9)
     for path in paths:
-        extract_nand_backup(path=path, boot9=boot9, dev=dev, otp=otp, id0=id0, skip_duplicate_check=skip_duplicate_check)
+        extract_nand_backup(path=path, crypto=crypto, boot9=boot9, dev=dev, otp=otp, id0=id0, skip_duplicate_check=skip_duplicate_check, quiet=quiet)
 
 def interactive() -> None:
-    print("Welcome to autocopy!")
+    print("Welcome to autocopy {}!".format(VERSION_STRING))
     print("This script will dump the BOSS databases for Pretendo using NAND dumps")
     print("(Hint: you can also use this from the command line, try --help)")
     print("You do not need to use your 3DS or GodMode9")
@@ -129,13 +154,19 @@ def main() -> None:
         parser.add_argument("nanddumps", type=pathlib.Path, nargs="+", help="path to NAND dump(s)")
         parser.add_argument("-9", "--boot9", type=pathlib.Path, default="boot9.bin", help="the ARM9 BootROM (boot9.bin), can be dumped from any console")
         parser.add_argument("-n", "--skip-duplicate-check", action="store_true", help="don't check if the file has been dumped already")
+        parser.add_argument("-q", "--quiet", action="store_true", help="suppress output, except errors")
+        parser.add_argument("-V", "--version", action="store_true", help="print version and exit")
         advanced = parser.add_argument_group("advanced")
         advanced.add_argument("-d", "--dev", action="store_true", help="extract from a development console's NAND")
-        advanced.add_argument("-o", "--otp", type=str, help="only needed for old NAND dumps")
-        advanced.add_argument("-c", "--cid", type=str, help="only needed for old NAND dumps")
+        advanced.add_argument("-o", "--otp", type=pathlib.Path, help="path to the OTP file, only needed for old NAND dumps")
+        advanced.add_argument("-c", "--cid", type=pathlib.Path, help="path to the CID file, only needed for old NAND dumps")
         advanced.add_argument("-0", "--id0", type=str, help="only needed if you encounter an error")
         args = parser.parse_args()
-        extract_nand_backups(paths=args.nanddumps, boot9=args.boot9, dev=args.dev, otp=args.otp, id0=args.id0, skip_duplicate_check=args.skip_duplicate_check)
+        if not args.quiet or args.version:
+            print("autocopy {}".format(VERSION_STRING))
+        if args.version:
+            sys.exit()
+        extract_nand_backups(paths=args.nanddumps, boot9=args.boot9, dev=args.dev, otp=args.otp, id0=args.id0, skip_duplicate_check=args.skip_duplicate_check, quiet=args.quiet)
 
 # thanks to ZeroSkill for making this a LOT simpler,
 # and not return a corrupted file
