@@ -73,7 +73,7 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
         #    mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with nand.open_ctr_fat() as ctrnand_handle:
-            crypto_engine = CryptoEngine()
+            crypto_engine = CryptoEngine(boot9=boot9)
             movable_sed = nand.essential.open('movable').read()
             crypto_engine.setup_sd_key(data=movable_sed)
             # detect the ID0
@@ -113,7 +113,7 @@ def interactive() -> None:
     print("This script will dump the BOSS databases for Pretendo using NAND dumps")
     print("(Hint: you can also use this from the command line, try --help)")
     print("You do not need to use your 3DS or GodMode9")
-    print("If you still have the 3DS, you should instead dump it using the normal method from https://pretendo.network/docs/network-dumps")
+    print("If you still have the 3DS, you should instead dump it using the normal method from spotpassarchive.github.io")
     answer = input("Do you want to continue? [Y/n] ").strip().upper()
     if answer != "" and answer != "Y" and answer != "YES":
         print("Goodbye")
