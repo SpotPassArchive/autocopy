@@ -67,10 +67,7 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
                         otp: str=None, cid: str=None, id0: str=None, skip_duplicate_check: bool=False) -> None:
     "extracts 4 layers of encoding from the NAND dump in order to get partitionA.bin"
     print("Extracting NAND backup {}...".format(os.path.basename(path)))
-    #nand_stat = nandctr.get_time(path)
     with NAND(path) as nand:
-        #with contextlib.redirect_stdout(None): # suppress output
-        #    mount = nandctr.CTRNandImageMount(nand_fp=nand, g_stat=nand_stat, dev=dev, readonly=True, otp=otp, cid=cid, boot9=boot9)
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with nand.open_ctr_fat() as ctrnand_handle:
             crypto_engine = CryptoEngine(boot9=boot9)
@@ -85,7 +82,7 @@ def extract_nand_backup(path: pathlib.Path, boot9: pathlib.Path = None, dev: boo
                 print("id0 = {}".format(id0))
             disa_path = "/data/{}/sysdata/00010034/00000000".format(id0)
 
-            # now get the DISA image containing the data we want,
+            # get the DISA image containing the data we want,
             # located at "/data/<id0>/sysdata/00010034/00000000"
             with ctrnand_handle.openbin(path=disa_path, mode="rb") as disa_image_handle:
                 # now read that DISA image's partitionA.bin
