@@ -23,6 +23,15 @@ Note: if you get a SmartScreen notice, click allow
 2. Open a terminal and enter the directory you downloaded it from
 3. Run `chmod +x ./autocopy-linux && ./autocopy-linux`
 
+## All
+If these instructions don't work, you can download `autocopy.py` and double-click it.
+
+# Compiling
+Make sure you install Python first.
+* Windows: double-click on `build.bat`
+* Linux: double-click on `build.sh`
+Once finished, the program will close.  The output will be stored in the `dest` directory.
+
 # Thanks
 In no particular order:
 * MisterSheeple: testing, introducing me to people in SpotPass Archival Project Discord, helping people use my script, many ideas
