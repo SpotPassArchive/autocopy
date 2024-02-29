@@ -1,6 +1,6 @@
 #!/bin/python3
 
-VERSION = (0, 1, 0) # major, minor, patch
+VERSION = (0, 2, 0) # major, minor, patch
 VERSION_STRING = "v{}".format(".".join([str(version_part) for version_part in VERSION]))
 
 import sys
@@ -18,6 +18,7 @@ try:
     from pyctr.type.nand import NAND
     from pyctr.crypto import CryptoEngine
     from pyctr.crypto import engine
+    import requests
 except ImportError as exception:
     if __name__ == "__main__":
         traceback.print_exception(exception)
@@ -77,18 +78,42 @@ def get_crypto_engine(boot9: pathlib.Path = None):
             print("An ARM9 BootROM was not found.  "
                   "Please dump it from ANY console (not necessarily the one that had the NAND backup) "
                   "and place it here, making sure it's named boot9.bin", file=sys.stderr)
-            sys.exit(1)
+            if __name__ == "__main__":
+                sys.exit(1)
+            return None
     return crypto
+
+def dump_file(path: pathlib.Path, content: bytes, skip_duplicate_check: bool=False) -> bool:
+    "dumps the extracted partition"
+    original_filename = os.path.basename(path)
+    filename = find_unused_filename(path)
+
+    # check if the file has been dumped already
+    if not skip_duplicate_check:
+        partition_hash = hashlib.md5(content).digest()
+        if is_duplicate(path=os.path.curdir, filename=original_filename, new_hash=partition_hash):
+            return None
+
+    # finally, write it to a file
+    with open(filename, "wb") as partition_out:
+        partition_out.write(content)
+
+    return filename
 
 # thanks to ihaveahax for telling me about pyctr
 def extract_nand_backup(path: pathlib.Path, crypto: CryptoEngine = None, boot9: pathlib.Path = None, dev: bool=False,
-                        otp: str=None, cid: str=None, id0: str=None, skip_duplicate_check: bool=False, quiet: bool=False) -> None:
-    "extracts 4 layers of encoding from the NAND dump in order to get partitionA.bin"
+                        otp: str=None, cid: str=None, id0: str=None, skip_duplicate_check: bool=False, quiet: bool=False) -> bytes:
+    """
+    extracts 4 layers of encoding from the NAND dump in order to get partitionA.bin
+    returns None on failure, on success returns a tuple of (partition_a: bytes, partition_b: bytes, partition_a_is_duplicate: bool, partition_b_is_duplicate: bool)"""
     if not quiet:
         print("Extracting NAND backup {}...".format(os.path.basename(path)))
     # this way, there doesn't need to be a seperate crypto for each console
     if crypto is None:
         crypto = get_crypto_engine(boot9=boot9)
+        # extraction failed
+        if crypto is None:
+            return None
     with NAND(file=path, dev=dev, crypto=crypto, otp_file=otp, cid_file=cid) as nand:
         # I am AMAZED I managed to do all this without a single temporary file or caching too much in memory
         with nand.open_ctr_fat() as ctrnand_handle:
@@ -108,27 +133,71 @@ def extract_nand_backup(path: pathlib.Path, crypto: CryptoEngine = None, boot9: 
             # located at "/data/<id0>/sysdata/00010034/00000000"
             with ctrnand_handle.openbin(path=disa_path, mode="rb") as disa_image_handle:
                 # now read that DISA image's partitionA.bin
-                partition_a = extract_disa_partition_a(disa_handle=disa_image_handle)
-                filename = find_unused_filename("partitionA.bin")
+                partition_a, partition_b = extract_disa_partitions(disa_handle=disa_image_handle)
 
-                # check if the file has been dumped already
-                if not skip_duplicate_check:
-                    partition_a_hash = hashlib.md5(partition_a).digest()
-                    if is_duplicate(path=os.path.curdir, filename="partitionA.bin", new_hash=partition_a_hash):
-                        if not quiet:
-                            print("Already dumped, skipping")
-                        return
+    if not quiet:
+        if partition_b is None:
+            print("partition B not found (this is normal)")
+        else:
+            print("partition B found")
 
-                # finally, write it to a file
-                with open(filename, "wb") as partition_a_out:
-                    partition_a_out.write(partition_a)
-                if not quiet:
-                    print("Dumped to {}".format(filename))
+    partition_a_filename = dump_file(path="partitionA.bin", content=partition_a, skip_duplicate_check=skip_duplicate_check)
+    if not quiet:
+        if partition_a_filename is None:
+            print("Already dumped partition A, skipping")
+        else:
+            print("Dumped partition A to {}".format(partition_a_filename))
+    if partition_b is None:
+        partition_b_filename = None
+    else:
+        partition_b_filename = dump_file(path="partitionB.bin", content=partition_b, skip_duplicate_check=skip_duplicate_check)
+        if partition_b_filename is None:
+            print("Already dumped partition B, skipping")
+        else:
+            print("Dumped partition B to {}".format(partition_b_filename))
+    return partition_a, partition_b, partition_a_filename is None, partition_b_filename is None
+
+def upload_dump(dump: bytes, url: str) -> bool:
+    response = requests.post(url=url, data=dump)
+    return response.status_code == 200
+
+def upload_dumps(partition_a_dumps: list, partition_b_dumps: list) -> bool:
+    "uploads the dumps to StreetPass Archive and returns the number of failures"
+    partition_a_api_url = "https://bossarchive.raregamingdump.ca/api/upload/ctr/partition-a"
+    partition_b_api_url = "https://bossarchive.raregamingdump.ca/api/upload/ctr/partition-b"
+    failures = 0
+    for partition_a_dump in partition_a_dumps:
+        if not upload_dump(dump=partition_a_dump, url=partition_a_api_url):
+            failures += 1
+            print("Failed to upload partitionA")
+    
+    for partition_b_dump in partition_b_dumps:
+        if not upload_dump(dump=partition_b_dump, url=partition_b_api_url):
+            failures += 1
+            print("Failed to upload partitionB")
 
 def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, skip_duplicate_check: bool=False, quiet: bool=False) -> None:
+    # using sets so duplicates are handled automatically
+    partition_a_dumps = set()
+    partition_b_dumps = set()
     crypto = get_crypto_engine(boot9=boot9)
     for path in paths:
-        extract_nand_backup(path=path, crypto=crypto, boot9=boot9, dev=dev, otp=otp, id0=id0, skip_duplicate_check=skip_duplicate_check, quiet=quiet)
+        extracted = extract_nand_backup(path=path, crypto=crypto, boot9=boot9,
+                                        dev=dev, otp=otp, id0=id0, skip_duplicate_check=skip_duplicate_check, quiet=quiet)
+        if extracted is None:
+            print("Extraction failed", file=sys.stderr)
+        else:
+            new_partition_a, new_partition_b, partition_a_is_duplicate, partition_b_is_duplicate = extracted
+            if new_partition_a is not None and not partition_a_is_duplicate:
+                partition_a_dumps.add(new_partition_a)
+            if new_partition_b is not None and not partition_b_is_duplicate:
+                partition_b_dumps.add(new_partition_b)
+        print()
+    if partition_a_dumps or partition_b_dumps: # checks if there are any new files
+        answer = input("Upload extracted files to StreetPass Archive? [Y/n] ").strip().upper()
+        if answer in ("", "Y", "YES"):
+            upload_dumps(partition_a_dumps=partition_a_dumps, partition_b_dumps=partition_b_dumps)
+    print("Done!")
 
 def interactive() -> None:
     print("Welcome to autocopy {}!".format(VERSION_STRING))
@@ -137,7 +206,7 @@ def interactive() -> None:
     print("You do not need to use your 3DS or GodMode9")
     print("If you still have the 3DS, you should instead dump it using the normal method from spotpassarchive.github.io")
     answer = input("Do you want to continue? [Y/n] ").strip().upper()
-    if answer != "" and answer != "Y" and answer != "YES":
+    if answer not in ("", "Y", "YES"):
         print("Goodbye")
         return
     path = input("Type the file path: ").strip()
@@ -170,12 +239,22 @@ def main() -> None:
 
 # thanks to ZeroSkill for making this a LOT simpler,
 # and not return a corrupted file
-def extract_disa_partition_a(disa_handle: io.IOBase) -> bytes:
+def extract_disa_partitions(disa_handle: io.IOBase) -> tuple:
     with DISA(disa_handle) as disa:
+        # partitionA
         partition = disa.partitions[0].dpfs_lv3_file
         partition.seek(0x9000)
-        content = partition.read()
-        return content
+        partition_a = partition.read()
+
+        # partitionB
+        if len(disa.partitions) > 1:
+            partition = disa.partitions[1].dpfs_lv3_file
+            partition.seek(0x9000)
+            partition_b = partition.read()
+        else:
+            partition_b = None
+        
+        return partition_a, partition_b
 
 if __name__ == "__main__":
     main()
