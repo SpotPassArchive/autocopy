@@ -13,9 +13,9 @@ Note: if you get a SmartScreen notice, click allow
 1. Download [autocopy-macos](https://github.com/SpotPassArchive/autocopy/releases/latest/download/autocopy-macos)
 2. Right-click (or control-click) the downloaded file, then click "Open"
 **You MUST start it this way, or else it won't run**
-![context menu showing "Open"](images/macos-1.png)
+<img src="https://github.com/SpotPassArchive/autocopy/raw/main/images/macos-1.png" alt="context menu showing Open" width="186">
 3. Click "Open" on the dialog that appears
-!["Apple cannot check it for malicious software" dialog](images/macos-3.png)
+<img src="https://github.com/SpotPassArchive/autocopy/raw/main/images/macos-3.png" alt="dialog that says: Apple cannot check it for malicious software" width="372"></p>
 4. From now on, you can skip steps 2 and 3
 
 ## Linux
