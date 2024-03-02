@@ -201,7 +201,7 @@ def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=Fals
 
 def interactive() -> None:
     print("Welcome to autocopy {}!".format(VERSION_STRING))
-    print("This script will dump the BOSS databases for Pretendo using NAND dumps")
+    print("This script will dump the BOSS databases for the SpotPass Archival Project using NAND dumps")
     print("(Hint: you can also use this from the command line, try --help)")
     print("You do not need to use your 3DS or GodMode9")
     print("If you still have the 3DS, you should instead dump it using the normal method from spotpassarchive.github.io")
@@ -219,7 +219,7 @@ def main() -> None:
     if len(sys.argv) == 1:
         interactive()
     else:
-        parser = argparse.ArgumentParser(description="A script to automatically dump Pretendo BOSS files from a NAND dump")
+        parser = argparse.ArgumentParser(description="A script to automatically dump BOSS files from a NAND dump")
         parser.add_argument("nanddumps", type=pathlib.Path, nargs="+", help="path to NAND dump(s)")
         parser.add_argument("-9", "--boot9", type=pathlib.Path, default="boot9.bin", help="the ARM9 BootROM (boot9.bin), can be dumped from any console")
         parser.add_argument("-n", "--skip-duplicate-check", action="store_true", help="don't check if the file has been dumped already")
