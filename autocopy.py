@@ -1,6 +1,6 @@
 #!/bin/python3
 
-VERSION = (0, 2, 0) # major, minor, patch
+VERSION = (0, 2, 1) # major, minor, patch
 VERSION_STRING = "v{}".format(".".join([str(version_part) for version_part in VERSION]))
 
 import sys
@@ -67,19 +67,20 @@ def is_duplicate(path: str, filename: str, new_hash: bytes) -> bool:
                 return True
     return False
 
-def get_crypto_engine(boot9: pathlib.Path = None):
-    if os.path.isfile(boot9):
+def get_crypto_engine(boot9: pathlib.Path = None, interactive: bool=False):
+    if boot9 is not None and os.path.isfile(boot9):
         crypto = CryptoEngine(boot9=boot9)
     else:
-        # use autodetection
         try:
+            # use autodetection
             crypto = CryptoEngine(boot9=None)
         except engine.BootromNotFoundError:
-            print("An ARM9 BootROM was not found.  "
-                  "Please dump it from ANY console (not necessarily the one that had the NAND backup) "
-                  "and place it here, making sure it's named boot9.bin", file=sys.stderr)
-            if __name__ == "__main__":
-                sys.exit(1)
+            if interactive:
+                print("An ARM9 BootROM was not found.  "
+                      "Please dump it from ANY console (not necessarily the one that had the NAND backup) "
+                      "and place it here, making sure it's named boot9.bin", file=sys.stderr)
+                if __name__ == "__main__":
+                    sys.exit(1)
             return None
     return crypto
 
@@ -110,7 +111,7 @@ def extract_nand_backup(path: pathlib.Path, crypto: CryptoEngine = None, boot9: 
         print("Extracting NAND backup {}...".format(os.path.basename(path)))
     # this way, there doesn't need to be a seperate crypto for each console
     if crypto is None:
-        crypto = get_crypto_engine(boot9=boot9)
+        crypto = get_crypto_engine(boot9=boot9, interactive=True)
         # extraction failed
         if crypto is None:
             return None
@@ -180,7 +181,7 @@ def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=Fals
     # using sets so duplicates are handled automatically
     partition_a_dumps = set()
     partition_b_dumps = set()
-    crypto = get_crypto_engine(boot9=boot9)
+    crypto = get_crypto_engine(boot9=boot9, interactive=True)
     for path in paths:
         extracted = extract_nand_backup(path=path, crypto=crypto, boot9=boot9,
                                         dev=dev, otp=otp, id0=id0, skip_duplicate_check=skip_duplicate_check, quiet=quiet)
@@ -209,10 +210,19 @@ def interactive() -> None:
     if answer not in ("", "Y", "YES"):
         print("Goodbye")
         return
-    path = input("Type the file path: ").strip()
+    path = input("Enter the file path: ").strip()
     if not path:
         return
-    extract_nand_backup(path)
+    # try to use autodetection first
+    crypto = get_crypto_engine(interactive=False)
+    if crypto is None:
+        boot9_path = input("Enter the path to the ARM9 BootROM (this is the same for every console): ").strip()
+        if not boot9_path:
+            return
+        crypto = get_crypto_engine(boot9_path=boot9_path)
+    else:
+        print("Found boot9.bin automatically")
+    extract_nand_backup(path=path, crypto=crypto)
 
 def main() -> None:
     # if there are no arguments, run in interactive mode
