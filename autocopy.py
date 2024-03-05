@@ -195,7 +195,7 @@ def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=Fals
                 partition_b_dumps.add(new_partition_b)
         print()
     if partition_a_dumps or partition_b_dumps: # checks if there are any new files
-        answer = input("Upload extracted files to StreetPass Archive? [Y/n] ").strip().upper()
+        answer = input("Upload extracted files to SpotPass Archive? [Y/n] ").strip().upper()
         if answer in ("", "Y", "YES"):
             upload_dumps(partition_a_dumps=partition_a_dumps, partition_b_dumps=partition_b_dumps)
     print("Done!")
