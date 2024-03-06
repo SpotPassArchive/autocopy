@@ -163,7 +163,7 @@ def upload_dump(dump: bytes, url: str) -> bool:
     return response.status_code == 200
 
 def upload_dumps(partition_a_dumps: list, partition_b_dumps: list) -> bool:
-    "uploads the dumps to StreetPass Archive and returns the number of failures"
+    "uploads the dumps to SpotPass Archive and returns the number of failures"
     partition_a_api_url = "https://bossarchive.raregamingdump.ca/api/upload/ctr/partition-a"
     partition_b_api_url = "https://bossarchive.raregamingdump.ca/api/upload/ctr/partition-b"
     failures = 0
