@@ -219,7 +219,7 @@ def interactive() -> None:
         boot9_path = input("Enter the path to the ARM9 BootROM (this is the same for every console): ").strip()
         if not boot9_path:
             return
-        crypto = get_crypto_engine(boot9_path=boot9_path)
+        crypto = get_crypto_engine(boot9=boot9_path)
     else:
         print("Found boot9.bin automatically")
     extract_nand_backup(path=path, crypto=crypto)
