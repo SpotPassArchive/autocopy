@@ -177,11 +177,12 @@ def upload_dumps(partition_a_dumps: list, partition_b_dumps: list) -> bool:
             failures += 1
             print("Failed to upload partitionB")
 
-def extract_nand_backups(paths: list, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, skip_duplicate_check: bool=False, quiet: bool=False) -> None:
+def extract_nand_backups(paths: list, crypto: CryptoEngine = None, boot9: pathlib.Path = None, dev: bool=False, otp: str=None, id0: str=None, skip_duplicate_check: bool=False, quiet: bool=False) -> None:
     # using sets so duplicates are handled automatically
     partition_a_dumps = set()
     partition_b_dumps = set()
-    crypto = get_crypto_engine(boot9=boot9, interactive=True)
+    if crypto is None:
+        crypto = get_crypto_engine(boot9=boot9, interactive=True)
     for path in paths:
         extracted = extract_nand_backup(path=path, crypto=crypto, boot9=boot9,
                                         dev=dev, otp=otp, id0=id0, skip_duplicate_check=skip_duplicate_check, quiet=quiet)
@@ -216,13 +217,15 @@ def interactive() -> None:
     # try to use autodetection first
     crypto = get_crypto_engine(interactive=False)
     if crypto is None:
+        crypto = get_crypto_engine(boot9="boot9.bin", interactive=False)
+    if crypto is None:
         boot9_path = input("Enter the path to the ARM9 BootROM (this is the same for every console): ").strip()
         if not boot9_path:
             return
         crypto = get_crypto_engine(boot9=boot9_path)
     else:
         print("Found boot9.bin automatically")
-    extract_nand_backup(path=path, crypto=crypto)
+    extract_nand_backups(paths=[path], crypto=crypto)
 
 def main() -> None:
     # if there are no arguments, run in interactive mode
