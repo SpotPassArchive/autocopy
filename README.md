@@ -1,3 +1,6 @@
+# The 3DS and Wii U online play has ended
+Thank you for your submissions!  Because Nintendo has shut down their servers, this script is now obsolete.  It is kept here for historical purposes.
+
 # autocopy
 This script will dump the BOSS databases for Pretendo using NAND dumps.  For more information, see https://spotpassarchive.github.io/
 
